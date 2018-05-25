@@ -1,0 +1,1140 @@
+---
+title: "Idealized Forms in Early Concepts of the Biological World: Results"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+#Load libraries needed for these analyses (any uninstalled packages will need to be installed)
+
+library(tidyverse)
+library(modelr)
+library(geepack)
+library(doBy)
+library(ggplot2)
+library(ggthemes)
+library(visreg)
+library(effects)
+library(dplyr)
+library(forcats)
+library(lme4)
+library(effects)
+library(devtools)
+library(papaja)
+library(multcomp)
+library(aod)
+library(knitr)
+library(car)
+library(RColorBrewer)
+library(cowplot)
+library(lmerTest)
+```
+
+```{r, include = FALSE}
+##### Study 1 #####
+
+#Study 1
+#Read in the data file
+#This file contains data from children and adults, in wide format
+ex1Wide<- read_csv("Extremes1_Items.csv")
+
+#Turn categorical variables into factors, and set reference categories and labels in a sensible and useful way
+
+ex1Wide$Condition<-factor(ex1Wide$Condition, levels = c("1", "2"))
+print(levels(ex1Wide$Condition))
+ex1Wide$Condition<-recode_factor(ex1Wide$Condition, "1" = "Best", "2" = "Representative")
+
+ex1Wide$Gender<-factor(ex1Wide$Gender, levels = c("1", "2"))
+print(levels(ex1Wide$Gender))
+ex1Wide$Gender<-recode_factor(ex1Wide$Gender, "1" = "Male", "2" = "Female", "3" = "Other")
+print(levels(ex1Wide$Gender))
+
+ex1Wide$AgeGroup<-factor(ex1Wide$AgeGroup, levels = c("1", "2", "3"))
+print(levels(ex1Wide$AgeGroup))
+ex1Wide$AgeGroup<-recode_factor(ex1Wide$AgeGroup, "1" = "Child_5.6", "2" = "Child_7.8", "3" = "Adult")
+
+ex1Wide$AdultChild <- ex1Wide$AgeGroup
+ex1Wide$AdultChild<-recode_factor(ex1Wide$AdultChild, "Child_5.6" = "Child", "Child_7.8" = "Child","Adult" = "Adult")
+
+ex1Wide_Child <- ex1Wide %>%
+  filter(AdultChild == "Child")
+ex1Wide_Adult <- ex1Wide %>%
+  filter(AdultChild == "Adult")
+ex1Wide_Child_5.6 <- ex1Wide_Child %>%
+  filter(AgeGroup == "Child_5.6")
+ex1Wide_Child_7.8 <- ex1Wide_Child %>%
+  filter(AgeGroup == "Child_7.8")
+
+#Nature and science questionnaire info - make Community a factor to specify levels
+ex1Wide$Community<-factor(ex1Wide$Community, levels = c("0", "1", "2"))
+print(levels(ex1Wide$Community))
+ex1Wide$Community<-recode_factor(ex1Wide$Community, "0" = "Urban", "1" = "Suburban", "2" = "Rural")
+print(levels(ex1Wide$Community))
+
+#Tidy the data
+#For this dataset, that means making two separate tidy columns - one for choice (representative or ideal) and one for induction
+
+#Tidy - choice items
+#we will add the discover items in a separate column after we tidy the choice into a column
+ex1TidyT <- ex1Wide %>%
+  gather(item, choice, choice1, choice2, choice3, choice4, choice5, choice6, choice7, choice8)
+
+ex1TidyT$item<-factor(ex1TidyT$item, levels = c("choice1", "choice2", "choice3", "choice4", "choice5", "choice6", "choice7", "choice8"))
+print(levels(ex1TidyT$item))
+ex1TidyT$item<-recode_factor(ex1TidyT$item, "choice1" = "1", "choice2" = "2", "choice3" = "3", "choice4" = "4", "choice5" = "5", "choice6" = "6", "choice7" = "7", "choice8" = "8")
+
+keepvarsT <- c("SID", "Condition", "ExactAge", "AgeGroup", "item", "choice")
+ex1TidyT <- ex1TidyT[keepvarsT]
+
+#Tidy - induction items
+ex1TidyD <- ex1Wide %>%
+  gather(item, induction, induction1, induction2, induction3, induction4, induction5, induction6, induction7, induction8)
+
+keepvarsD <- c("SID", "item", "induction")
+ex1TidyD_short <- ex1TidyD[keepvarsD]
+
+ex1TidyD_short$item<-factor(ex1TidyD_short$item, levels = c("induction1", "induction2", "induction3", "induction4", "induction5", "induction6", "induction7", "induction8"))
+print(levels(ex1TidyD_short$item))
+ex1TidyD_short$item<-recode_factor(ex1TidyD_short$item, "induction1" = "1", "induction2" = "2", "induction3" = "3", "induction4" = "4", "induction5" = "5", "induction6" = "6", "induction7" = "7", "induction8" = "8")
+
+ex1Tidy <- merge(ex1TidyT, ex1TidyD_short, by = c("SID", "item"))
+ex1 <- ex1Tidy
+
+#mark the positive valence and negative valence items to compare
+ex1$valence<-ex1$item
+ex1$valence<-recode_factor(ex1$valence, "1" = "positive", "2" = "negative", "3"  = "positive", "4" = "positive", "5" = "negative", "6" = "positive", "7" = "negative", "8" = "negative")
+print(levels(ex1$valence))
+
+#for simple effects in each age group
+Child_5.6Tidy <- ex1 %>%
+  filter(AgeGroup == "Child_5.6")
+Child_7.8Tidy <- ex1 %>%
+  filter(AgeGroup == "Child_7.8")
+AdultTidy<-ex1 %>%
+  filter(AgeGroup == "Adult")
+
+#Tibbles for follow-up analyses
+Representative <- ex1 %>%
+  filter(Condition == "Representative")
+Ideals <- ex1 %>%
+  filter(Condition == "Best")
+```
+
+```{r, include = FALSE}
+#Main analysis testing for effects of condition and age group on choice judgments in Study 1. This is a Linear Mixed Model, implemented with the lme4 package, using "lmer." This model tests for main and interactive effects of Condition and age group (between participants), and item Valence (within participants). Random instercepts are included for item and participant.
+
+#choice
+choice <- lmer(cbind(choice) ~ AgeGroup*Condition*valence + (1|SID) + (1|item), data = ex1)
+choiceS<-summary(choice)
+tableT<-as.data.frame(coef(choiceS))
+tableT
+ex1_ANOVAtableT<-as.data.frame(anova(choice, ddf = "Kenward-Roger", type = 3))
+ex1_ANOVAtableT
+```
+
+```{r, include = FALSE}
+#marginal means
+meansAgeT<-effect("AgeGroup", choice)
+meansAgeT<-as.data.frame(meansAgeT)
+meansAgeT
+
+meansCondT<-effect("Condition", choice)
+meansCondT<-as.data.frame(meansCondT)
+meansCondT
+
+meansCondAgeT<-effect("AgeGroup*Condition", choice)
+meansCondAgeT<-as.data.frame(meansCondAgeT)
+meansCondAgeT
+
+meansCondValT<-effect("Condition*valence", choice)
+meansCondValT<-as.data.frame(meansCondValT)
+meansCondValT
+
+#cell means
+meansCellT<-effect("AgeGroup*Condition*valence", choice)
+meansCellT<-as.data.frame(meansCellT)
+meansCellT
+
+#simple main effects of age and valence in each condition
+
+#Representative condition
+Choice_Representative <- lmer(cbind(choice) ~ AgeGroup*valence + (1|SID) + (1|item), data = Representative)
+Choice_RepresentativeS<-summary(Choice_Representative)
+tableT_Representative<-as.data.frame(coef(Choice_RepresentativeS))
+tableT_Representative
+ex1_ANOVAtableT_Representative<-as.data.frame(anova(Choice_Representative, ddf = "Kenward-Roger", type = 3))
+ex1_ANOVAtableT_Representative
+```
+
+```{r, include = FALSE}
+
+#ideals condition
+Choice_Ideals <- lmer(cbind(choice) ~ AgeGroup*valence + (1|SID) + (1|item), data = Ideals)
+Choice_IdealsS<-summary(Choice_Ideals)
+tableT_Ideals<-as.data.frame(coef(Choice_IdealsS))
+tableT_Ideals
+ex1_ANOVAtableT_Ideals<-as.data.frame(anova(Choice_Ideals, ddf = "Kenward-Roger", type = 3))
+ex1_ANOVAtableT_Ideals
+```
+
+```{r, include = FALSE}
+#marginal means
+meansValT_Ideals<-effect("valence", Choice_Ideals)
+meansValT_Ideals<-as.data.frame(meansValT_Ideals)
+meansValT_Ideals
+
+#Simple main effects within each age group
+#5-6 year olds
+choice5.6 <- lmer(cbind(choice) ~ Condition*valence + (1|SID) + (1|item), data = Child_5.6Tidy)
+summary(choice5.6)
+choiceS5.6<-summary(choice5.6)
+tableT5.6<-as.data.frame(coef(choiceS5.6))
+tableT5.6
+ex1_ANOVAtableT5.6<-as.data.frame(anova(choice5.6, ddf = "Kenward-Roger", type = 3))
+ex1_ANOVAtableT5.6
+```
+
+```{r, include = FALSE}
+#marginal means
+meansCondT5.6<-effect("Condition", choice5.6)
+meansCondT5.6<-as.data.frame(meansCondT5.6)
+meansCondT5.6
+
+###7-8 year olds
+choice7.8 <- lmer(cbind(choice) ~ Condition*valence + (1|SID) + (1|item), data = Child_7.8Tidy)
+summary(choice7.8)
+choiceS7.8<-summary(choice7.8)
+tableT7.8<-as.data.frame(coef(choiceS7.8))
+tableT7.8
+ex1_ANOVAtableT7.8<-as.data.frame(anova(choice7.8, ddf = "Kenward-Roger", type = 3))
+ex1_ANOVAtableT7.8
+
+#marginal means
+meansCondT7.8<-effect("Condition", choice7.8)
+meansCondT7.8<-as.data.frame(meansCondT7.8)
+meansCondT7.8
+
+#cell means
+meansCellT7.8<-effect("Condition*valence", choice7.8)
+meansCellT7.8<-as.data.frame(meansCellT7.8)
+meansCellT7.8
+
+#Adults
+choiceAdult <- lmer(cbind(choice) ~ Condition*valence + (1|SID) + (1|item), data = AdultTidy)
+summary(choiceAdult)
+choiceSAdult<-summary(choiceAdult)
+tableTAdult<-as.data.frame(coef(choiceSAdult))
+tableTAdult
+ex1_ANOVAtableTAdult<-as.data.frame(anova(choiceAdult, ddf = "Kenward-Roger", type = 3))
+ex1_ANOVAtableTAdult
+
+#marginal means
+meansValTAdult<-effect("valence", choiceAdult)
+meansValTAdult<-as.data.frame(meansValTAdult)
+meansValTAdult
+
+meansCondTAdult<-effect("Condition", choiceAdult)
+meansCondTAdult<-as.data.frame(meansCondTAdult)
+meansCondTAdult
+
+#cell means
+meansCellTAdult<-effect("Condition*valence", choiceAdult)
+meansCellTAdult<-as.data.frame(meansCellTAdult)
+meansCellTAdult
+
+# Induction - Study 1
+
+#Main analysis testing for effects of condition and age group on induction judgments in Study 1. This is a Generalized Linear Mixed Model (GLMM), implemented with the lme4 package, using "glmer" to specify a binomial distribution, since it was forced-choice between average and extreme exemplars. This model tests for main and interactive effects of Condition and age group, and Valence (w/in participants). Random intercepts for item in participant are included. 
+
+induction<-glmer(cbind(induction) ~ AgeGroup*Condition*valence + (1|SID) + (1|item), data = ex1, family=binomial)
+inductionS<-summary(induction)
+inductionS
+tableD<-as.data.frame(coef(summary(induction)))
+tableD
+ex1_ANOVAtableD<-as.data.frame(car::Anova(induction, type = "III"))
+ex1_ANOVAtableD
+
+#marginal means
+meansAgeD<-effect("AgeGroup", induction)
+meansAgeD<-as.data.frame(meansAgeD)
+meansAgeD
+```
+
+```{r, include = FALSE}
+### Study 2 ###
+
+#Read in the data file
+#This file contains data from children and adults, in wide format
+ex2Wide<- read_csv("Extremes2_Items.csv")
+
+#Turn categorical variables into factors, and set reference categories and labels in a sensible and useful way
+
+ex2Wide$Condition<-factor(ex2Wide$Condition, levels = c("1", "2"))
+print(levels(ex2Wide$Condition))
+ex2Wide$Condition<-recode_factor(ex2Wide$Condition, "1" = "Best", "2" = "Representative")
+
+ex2Wide$Gender<-factor(ex2Wide$Gender, levels = c("1", "2"))
+print(levels(ex2Wide$Gender))
+ex2Wide$Gender<-recode_factor(ex2Wide$Gender, "1" = "Male", "2" = "Female", "3" = "Other")
+print(levels(ex2Wide$Gender))
+
+ex2Wide$AgeGroup<-factor(ex2Wide$AgeGroup, levels = c("1", "2", "3", "4"))
+print(levels(ex2Wide$AgeGroup))
+ex2Wide$AdultChild <- ex2Wide$AgeGroup
+ex2Wide$AgeGroup<-recode_factor(ex2Wide$AgeGroup, "1" = "Child_5.6", "2" = "Child_7.8", "3" = "Child_9.10", "4" = "Adult")
+
+ex2Wide$AdultChild <- ex2Wide$AgeGroup
+ex2Wide$AdultChild<-recode_factor(ex2Wide$AdultChild, "Child_5.6" = "Child", "Child_7.8" = "Child", "Child_9.10" = "Child", "Adult" = "Adult")
+
+ex2Wide_Child <- ex2Wide %>%
+  filter(AdultChild == "Child")
+ex2Wide_Adult <- ex2Wide %>%
+  filter(AdultChild == "Adult")
+ex2Wide_Child_5.6 <- ex2Wide_Child %>%
+  filter(AgeGroup == "Child_5.6")
+ex2Wide_Child_7.8 <- ex2Wide_Child %>%
+  filter(AgeGroup == "Child_7.8")
+ex2Wide_Child_9.10 <- ex2Wide_Child %>%
+  filter(AgeGroup == "Child_9.10")
+
+#Nature and science questionnaire info - make Community a factor to specify levels
+ex2Wide$Community<-factor(ex2Wide$Community, levels = c("0", "1", "2"))
+print(levels(ex2Wide$Community))
+ex2Wide$Community<-recode_factor(ex2Wide$Community, "0" = "Urban", "1" = "Suburban", "2" = "Rural")
+print(levels(ex2Wide$Community))
+
+#Tidy the data
+#For this dataset, that means making two separate tidy columns - one for choice (typicality or ideals) and one for induction
+
+#Tidy - choice items
+#we will add the discover items in a separate column after we tidy the choice into a column
+ex2TidyT <- ex2Wide %>%
+  gather(item, choice, choice1, choice2, choice3, choice4, choice5, choice6, choice7, choice8)
+
+ex2TidyT$item<-factor(ex2TidyT$item, levels = c("choice1", "choice2", "choice3", "choice4", "choice5", "choice6", "choice7", "choice8"))
+print(levels(ex2TidyT$item))
+ex2TidyT$item<-recode_factor(ex2TidyT$item, "choice1" = "1", "choice2" = "2", "choice3" = "3", "choice4" = "4", "choice5" = "5", "choice6" = "6", "choice7" = "7", "choice8" = "8")
+
+keepvarsT <- c("SID", "Condition", "ExactAge", "AgeGroup", "item", "choice")
+ex2TidyT <- ex2TidyT[keepvarsT]
+
+#Tidy - induction items
+ex2TidyD <- ex2Wide %>%
+  gather(item, induction, induction1, induction2, induction3, induction4, induction5, induction6, induction7, induction8)
+
+keepvarsD <- c("SID", "item", "induction")
+ex2TidyD_short <- ex2TidyD[keepvarsD]
+
+ex2TidyD_short$item<-factor(ex2TidyD_short$item, levels = c("induction1", "induction2", "induction3", "induction4", "induction5", "induction6", "induction7", "induction8"))
+print(levels(ex2TidyD_short$item))
+ex2TidyD_short$item<-recode_factor(ex2TidyD_short$item, "induction1" = "1", "induction2" = "2", "induction3" = "3", "induction4" = "4", "induction5" = "5", "induction6" = "6", "induction7" = "7", "induction8" = "8")
+
+ex2Tidy <- merge(ex2TidyT, ex2TidyD_short, by = c("SID", "item"))
+ex2 <- ex2Tidy
+
+#mark the positive valence and negative valence items to compare
+ex2$valence<-ex2$item
+ex2$valence<-recode_factor(ex2$valence, "1" = "positive", "2" = "negative", "3"  = "positive", "4" = "positive", "5" = "negative", "6" = "positive", "7" = "negative", "8" = "negative")
+print(levels(ex2$valence))
+
+#for simple effects in each age group
+ex2_Child_5.6Tidy <- ex2 %>%
+  filter(AgeGroup == "Child_5.6")
+ex2_Child_7.8Tidy <- ex2 %>%
+  filter(AgeGroup == "Child_7.8")
+ex2_Child_9.10Tidy <- ex2 %>%
+  filter(AgeGroup == "Child_9.10")
+ex2_AdultTidy<-ex2 %>%
+  filter(AgeGroup == "Adult")
+
+#Tibbles for follow-up analyses
+Representative2 <- ex2 %>%
+  filter(Condition == "Representative")
+Ideals2 <- ex2 %>%
+  filter(Condition == "Best")
+
+#Main analysis testing for effects of condition and age group on choice judgments in Study 2. This is a Linear Mixed Model, implemented with the lme4 package, using "lmer" to specify that item is repeated within participants. This model tests for main and interactive effects of Condition and age group. 
+
+#choice
+Choice2 <- lmer(cbind(choice) ~ AgeGroup*Condition*valence + (1|SID) + (1|item), data = ex2)
+summary(Choice2)
+choiceS_ex2<-summary(Choice2)
+tableT_ex2<-as.data.frame(coef(choiceS_ex2))
+tableT_ex2
+ex2_ANOVAtableT<-as.data.frame(anova(Choice2, ddf = "Kenward-Roger", type = 3))
+ex2_ANOVAtableT
+```
+
+```{r, include = FALSE}
+#marginal means
+meansAgeT_ex2<-effect("AgeGroup", Choice2)
+meansAgeT_ex2<-as.data.frame(meansAgeT_ex2)
+meansAgeT_ex2
+
+meansCondT_ex2<-effect("Condition", Choice2)
+meansCondT_ex2<-as.data.frame(meansCondT_ex2)
+meansCondT_ex2
+
+meansCondAgeT_ex2<-effect("AgeGroup*Condition", Choice2)
+meansCondAgeT_ex2<-as.data.frame(meansCondAgeT_ex2)
+meansCondAgeT_ex2
+
+meansCondValT_ex2<-effect("Condition*valence", Choice2)
+meansCondValT_ex2<-as.data.frame(meansCondValT_ex2)
+meansCondValT_ex2
+
+#cell means
+meansCellT_ex2<-effect("AgeGroup*Condition*valence", Choice2)
+meansCellT_ex2<-as.data.frame(meansCellT_ex2)
+meansCellT_ex2
+
+#simple main effects of age and valence in each condition
+
+#Representative condition condition
+Choice2_Representative <- lmer(cbind(choice) ~ AgeGroup*valence + (1|SID) + (1|item), data = Representative2)
+summary(Choice2_Representative)
+Choice2_RepresentativeS<-summary(Choice2_Representative)
+tableT_Representative<-as.data.frame(coef(Choice2_RepresentativeS))
+tableT_Representative
+ex2_ANOVAtableT_Representative<-as.data.frame(anova(Choice2_Representative, ddf = "Kenward-Roger", type = 3))
+ex2_ANOVAtableT_Representative
+
+#Ideal condition
+Choice2_Ideals <- lmer(cbind(choice) ~ AgeGroup*valence + (1|SID) + (1|item), data = Ideals2)
+summary(Choice2_Ideals)
+Choice2_IdealsS<-summary(Choice2_Ideals)
+tableT_Ideals<-as.data.frame(coef(Choice2_IdealsS))
+tableT_Ideals
+ex2_ANOVAtableT_Ideals<-as.data.frame(anova(Choice2_Ideals, ddf = "Kenward-Roger", type = 3))
+ex2_ANOVAtableT_Ideals
+
+#marginal means
+meansValT_Ideals<-effect("valence", Choice2_Ideals)
+meansValT_Ideals<-as.data.frame(meansValT_Ideals)
+meansValT_Ideals
+
+#Simple main effects within each age group
+#5-6 year olds
+choice2_5.6 <- lmer(cbind(choice) ~ Condition*valence + (1|SID) + (1|item), data = ex2_Child_5.6Tidy)
+summary(choice2_5.6)
+choiceS5.6<-summary(choice2_5.6)
+tableT5.6<-as.data.frame(coef(choiceS5.6))
+tableT5.6
+ex2_ANOVAtableT5.6<-as.data.frame(anova(choice2_5.6, ddf = "Kenward-Roger", type = 3))
+ex2_ANOVAtableT5.6
+```
+
+```{r, include = FALSE}
+#marginal means
+meansCondT_ex25.6<-effect("Condition", choice2_5.6)
+meansCondT_ex25.6<-as.data.frame(meansCondT_ex25.6)
+meansCondT_ex25.6
+
+#cell means
+meansCellT_ex25.6<-effect("Condition*valence", choice2_5.6)
+meansCellT_ex25.6<-as.data.frame(meansCellT_ex25.6)
+meansCellT_ex25.6
+
+###7-8 year olds
+choice2_7.8 <- lmer(cbind(choice) ~ Condition*valence + (1|SID) + (1|item), data = ex2_Child_7.8Tidy)
+summary(choice2_7.8)
+choiceS7.8<-summary(choice2_7.8)
+tableT7.8<-as.data.frame(coef(choiceS7.8))
+tableT7.8
+ex2_ANOVAtableT7.8<-as.data.frame(anova(choice2_7.8, ddf = "Kenward-Roger", type = 3))
+ex2_ANOVAtableT7.8
+
+#marginal means
+meansCondT_ex27.8<-effect("Condition", choice2_7.8)
+meansCondT_ex27.8<-as.data.frame(meansCondT_ex27.8)
+meansCondT_ex27.8
+
+#cell means
+meansCellT_ex27.8<-effect("Condition*valence", choice2_7.8)
+meansCellT_ex27.8<-as.data.frame(meansCellT_ex27.8)
+meansCellT_ex27.8
+
+###9-10 year olds
+choice2_9.10 <- lmer(cbind(choice) ~ Condition*valence + (1|SID) + (1|item), data = ex2_Child_9.10Tidy)
+summary(choice2_9.10)
+choiceS9.10<-summary(choice2_9.10)
+tableT9.10<-as.data.frame(coef(choiceS9.10))
+tableT9.10
+ex2_ANOVAtableT9.10<-as.data.frame(anova(choice2_9.10, ddf = "Kenward-Roger", type = 3))
+ex2_ANOVAtableT9.10
+
+#marginal means
+meansCondT_ex29.10<-effect("Condition", choice2_9.10)
+meansCondT_ex29.10<-as.data.frame(meansCondT_ex29.10)
+meansCondT_ex29.10
+
+#cell means
+meansCellT_ex29.10<-effect("Condition*valence", choice2_9.10)
+meansCellT_ex29.10<-as.data.frame(meansCellT_ex29.10)
+meansCellT_ex29.10
+
+#Adults
+choiceAdult_ex2 <- lmer(cbind(choice) ~ Condition*valence + (1|SID) + (1|item), data = ex2_AdultTidy)
+summary(choiceAdult_ex2)
+choiceSAdult_ex2<-summary(choiceAdult_ex2)
+tableTAdult_ex2<-as.data.frame(coef(choiceSAdult_ex2))
+tableTAdult_ex2
+ex2_ANOVAtableTAdult<-as.data.frame(anova(choiceAdult_ex2, ddf = "Kenward-Roger", type = 3))
+ex2_ANOVAtableTAdult
+
+#marginal means
+meansCondT_ex2Adult<-effect("Condition", choiceAdult)
+meansCondT_ex2Adult<-as.data.frame(meansCondT_ex2Adult)
+meansCondT_ex2Adult
+
+#cell means
+meansCellT_ex2Adult<-effect("Condition*valence", choiceAdult)
+meansCellT_ex2Adult<-as.data.frame(meansCellT_ex2Adult)
+meansCellT_ex2Adult
+
+# Induction - Study 2
+induction2<-glmer(cbind(induction) ~ AgeGroup*Condition*valence + (1|SID) + (1|item), data = ex2, family=binomial)
+induction2S<-summary(induction2)
+induction2S
+tableD<-as.data.frame(coef(summary(induction2)))
+tableD
+ex2_ANOVAtableD<-as.data.frame(car::Anova(induction2, type = "III"))
+ex2_ANOVAtableD
+
+#marginal means
+meansAgeD_ex2<-effect("AgeGroup", induction2)
+meansAgeD_ex2<-as.data.frame(meansAgeD_ex2)
+meansAgeD_ex2
+```
+
+```{r, echo = FALSE, warning = FALSE}
+
+#Create Figure 2 - choice, studies 1 and 2
+#Study 1
+Study_1<-ggplot() +
+  geom_hline(mapping = NULL, data = NULL, colour = "#F9610A", yintercept = 3, na.rm = FALSE,
+  show.legend = NA) +
+  geom_point(data = meansCondAgeT, aes(x = AgeGroup, y = fit, colour = Condition, shape = Condition), stat = "identity", size = 4) +
+    scale_x_discrete(limits=c("Child_5.6", "Child_7.8", "Adult"), labels = c("Child_5.6" = "5-6", "Child_7.8" = "7-8", "Adult" = "Adults")) +
+  ylim(1,5.2) +
+  geom_jitter(data = ex1, aes(x = AgeGroup, y = choice, colour = Condition), width = .30, height = .00, alpha = .5, shape = 124, size = 1) +
+  ggtitle("Study 1") +
+  theme_few() +
+  theme(axis.text=element_text(size=10),
+        axis.title=element_text(size=10)) +
+  theme(legend.position="bottom", legend.direction="horizontal") +
+  theme(legend.title = element_blank()) +
+  scale_shape_manual(values=c(17, 19)) +
+  scale_color_manual(values=c("#4C9900", "#0066CC"), guide = guide_legend(reverse = FALSE)) +
+labs(x="age group", y="Average exemplar selected")
+
+#Study 2
+Study_2<-ggplot() +
+  geom_hline(mapping = NULL, data = NULL, colour = "#F9610A", yintercept = 3, na.rm = FALSE,
+  show.legend = NA) +
+  geom_point(data = meansCondAgeT_ex2, aes(x = AgeGroup, y = fit, colour = Condition, shape = Condition), stat = "identity", size = 4) +
+    scale_x_discrete(limits=c("Child_5.6", "Child_7.8", "Child_9.10", "Adult"), labels = c("Child_5.6" = "5-6", "Child_7.8" = "7-8", "Child_9.10" = "9-10", "Adult" = "Adults")) +
+  ylim(1,5.2) +
+  geom_jitter(data = ex2, aes(x = AgeGroup, y = choice, colour = Condition), width = .30, height = .00, alpha = .5, shape = 124, size = 1) +
+  ggtitle("Study 2") +
+  theme_few() +
+  theme(axis.text=element_text(size=10),
+        axis.title=element_text(size=10)) +
+  theme(legend.position="bottom", legend.direction="horizontal") +
+  theme(legend.title = element_blank()) +
+  scale_shape_manual(values=c(17, 19)) +
+  scale_color_manual(values=c("#4C9900", "#0066CC"), guide = guide_legend(reverse = FALSE)) +
+  labs(x="age group", y=NULL)
+
+#Comine into one figure
+require(cowplot)
+Figure2 <- plot_grid(Study_1, Study_2)
+save_plot("exfig2.png", Figure2, base_aspect_ratio = 1.3)
+```
+
+```{r, include = FALSE}
+### Study 3 ###
+
+#Read in the data file
+#This file contains data from children and adults, in wide format
+ex3Wide<- read_csv("Extremes3_Items.csv")
+
+#Turn categorical variables into factors, and set reference categories and labels in a sensible and useful way
+
+ex3Wide$Contrast<-factor(ex3Wide$Contrast, levels = c("0", "1"))
+print(levels(ex3Wide$Contrast))
+ex3Wide$Contrast<-recode_factor(ex3Wide$Contrast, "0" = "No Contrast", "1" = "Contrast")
+
+ex3Wide$Functional<-factor(ex3Wide$Functional, levels = c("0", "1"))
+print(levels(ex3Wide$Functional))
+ex3Wide$Functional<-recode_factor(ex3Wide$Functional, "0" = "Nonfunctional", "1" = "Functional")
+
+ex3Wide$Gender<-factor(ex3Wide$Gender, levels = c("1", "2"))
+print(levels(ex3Wide$Gender))
+ex3Wide$Gender<-recode_factor(ex3Wide$Gender, "1" = "Male", "2" = "Female", "3" = "Other")
+
+ex3Wide$AgeGroup<-factor(ex3Wide$AgeGroup, levels = c("1", "2", "3"))
+print(levels(ex3Wide$AgeGroup))
+ex3Wide$AdultChild <- ex3Wide$AgeGroup
+
+ex3Wide$AgeGroup<-recode_factor(ex3Wide$AgeGroup, "1" = "Child_5.6", "2" = "Child_7.8", "3" = "Adult")
+
+ex3Wide$AdultChild<-recode_factor(ex3Wide$AdultChild, "1" = "Child", "2" = "Child", "3" = "Adult")
+
+#Make Community a factor to specify levels
+ex3Wide$Community<-factor(ex3Wide$Community, levels = c("0", "1", "2"))
+print(levels(ex3Wide$Community))
+ex3Wide$Community<-recode_factor(ex3Wide$Community, "0" = "Urban", "1" = "Suburban", "2" = "Rural")
+print(levels(ex3Wide$Community))
+
+#Now let's make some subsets of this dataset for participants info
+ex3Wide_Child_5.6 <- ex3Wide %>%
+  filter(AgeGroup == "Child_5.6")
+ex3Wide_Child_7.8 <- ex3Wide %>%
+  filter(AgeGroup == "Child_7.8")
+ex3Wide_Adult<-ex3Wide %>%
+  filter(AgeGroup == "Adult")
+ex3Wide_Child <- ex3Wide %>%
+  filter(AdultChild == "Child")
+```
+
+```{r, include = FALSE}
+#Now we need to tidy the data
+#For this dataset, that means making two separate tidy columns - one for representative and one for discover (induction)
+
+#Tidy - representative (typicality) items
+#we will add the discover items in a separate column after we tidy the representative into a column
+ex3TidyT <- ex3Wide %>%
+  gather(item, representative, typ1, typ2, typ3, typ4, typ5, typ6, typ7, typ8)
+
+ex3TidyT$item<-factor(ex3TidyT$item, levels = c("typ1", "typ2", "typ3", "typ4", "typ5", "typ6", "typ7", "typ8"))
+print(levels(ex3TidyT$item))
+ex3TidyT$item<-recode_factor(ex3TidyT$item, "typ1" = "1", "typ2" = "2", "typ3" = "3", "typ4" = "4", "typ5" = "5", "typ6" = "6", "typ7" = "7", "typ8" = "8")
+
+keepvarsT <- c("SID", "Contrast", "Functional", "ExactAge", "AgeGroup", "Gender", "item", "representative")
+ex3TidyT <- ex3TidyT[keepvarsT]
+
+#Tidy - discover items
+ex3TidyD <- ex3Wide %>%
+  gather(item, induction, discover1, discover2, discover3, discover4, discover5, discover6, discover7, discover8)
+
+keepvarsD <- c("SID", "item", "induction")
+ex3TidyD_short <- ex3TidyD[keepvarsD]
+
+ex3TidyD_short$item<-factor(ex3TidyD_short$item, levels = c("discover1", "discover2", "discover3", "discover4", "discover5", "discover6", "discover7", "discover8"))
+print(levels(ex3TidyD_short$item))
+ex3TidyD_short$item<-recode_factor(ex3TidyD_short$item, "discover1" = "1", "discover2" = "2", "discover3" = "3", "discover4" = "4", "discover5" = "5", "discover6" = "6", "discover7" = "7", "discover8" = "8")
+
+ex3Tidy <- merge(ex3TidyT, ex3TidyD_short, by = c("SID", "item"))
+ex3 <- ex3Tidy
+
+#Copy the iduction and typicality items into raw responses (for items analysis) before reverse-coding
+ex3$representativeRaw<-ex3$representative
+ex3$inductionRaw<-ex3$induction
+
+#Mark which items get reverse-coded with a 1 (others with a 0)
+ex3$reverse<-ex3$item
+ex3$reverse<-recode_factor(ex3$reverse, "1" = "1", "2" = "0", "3" = "0", "4" = "1", "5" = "1", "6" = "0", "7" = "0", "8" = "1")
+print(levels(ex3$reverse))
+
+#Reverse-code representative and induction responses for the 4 items presented in reversed direction, to allow comparison across items
+ex3$representative_r<-recode(ex3$representative, "5=1; 4=2; 3=3; 2=4; 1=5")
+ex3$induction_r<-recode(ex3$induction, "5=1; 4=2; 3=3; 2=4; 1=5")
+ex3$representative[ex3$reverse == "1"] <- ex3$representative_r[ex3$reverse == "1"]
+ex3$induction[ex3$reverse == "1"] <- ex3$induction_r[ex3$reverse == "1"]
+
+#Mark the direction of progression in reverse-coded responses (most-least = increase in amount of varied property progresses from left to right, least-most = progresses from right to left). Since reverse-coding made all scales organized so the the most functionally ideal is the highest number (i.e., progressing to the right), so scales with a "most-least" direction are those in which the functional ideal has least rather than most of the varied property.
+
+ex3$direction<-ex3$item
+ex3$direction<-recode_factor(ex3$item, "1" = "least-most", "2" = "least-most", "3"  = "least-most", "4" = "most-least", "5" = "most-least", "6" = "most-least", "7" = "least-most", "8" = "most-least")
+print(levels(ex3$direction))
+
+#For simple effects in each age group
+ex3_Child_5.6Tidy <- ex3 %>%
+  filter(AgeGroup == "Child_5.6")
+ex3_Child_7.8Tidy <- ex3 %>%
+  filter(AgeGroup == "Child_7.8")
+ex3_AdultTidy<-ex3 %>%
+  filter(AgeGroup == "Adult")
+
+#Tibbles for follow-up analyses
+Functional <- ex3 %>%
+  filter(Functional == "Functional")
+NoFunctional <- ex3 %>%
+  filter(Functional == "Nonfunctional")
+Contrast <- ex3 %>%
+  filter(Contrast == "Contrast")
+NoContrast <- ex3 %>%
+  filter(Contrast == "No Contrast")
+```
+
+```{r, include = FALSE}
+#Main analysis testing for effects of age, functional information, contrast category, and scale direction in Study 3. This is a Linear Mixed Model, implemented with the lme4 package. Random intercepts are included for item and participant.
+
+#Representativeness (representative)
+Representative <- lmer(cbind(representative) ~ AgeGroup*Contrast*Functional + (1|SID) + (1|item), data = ex3)
+RepresentativeS<-summary(Representative)
+tableT<-as.data.frame(coef(RepresentativeS))
+tableT
+ex3_ANOVAtableT<-as.data.frame(anova(Representative, ddf = "Kenward-Roger", type = 3))
+ex3_ANOVAtableT
+```
+
+```{r, include = FALSE}
+#marginal means
+meansAgeT_ex3<-effect("AgeGroup", Representative)
+meansAgeT_ex3<-as.data.frame(meansAgeT_ex3)
+meansAgeT_ex3
+
+meansContrastT<-effect("Contrast", Representative)
+meansContrastT<-as.data.frame(meansContrastT)
+meansContrastT
+
+meansFuncT<-effect("Functional", Representative)
+meansFuncT<-as.data.frame(meansFuncT)
+meansFuncT
+
+meansFunAgeT<-effect("AgeGroup*Functional", Representative)
+meansFunAgeT<-as.data.frame(meansFunAgeT)
+meansFunAgeT
+
+#cell means
+meansCellT_ex3<-effect("AgeGroup*Contrast*Functional", Representative)
+meansCellT_ex3<-as.data.frame(meansCellT_ex3)
+meansCellT_ex3
+
+#Simple main effects within each age group
+#5-6 year olds
+Representative5.6 <- lmer(cbind(representative) ~ Contrast*Functional + (1|SID) + (1|item), data = ex3_Child_5.6Tidy)
+RepresentativeS5.6<-summary(Representative5.6)
+tableT5.6<-as.data.frame(coef(RepresentativeS5.6))
+tableT5.6
+ex3_ANOVAtableT5.6<-as.data.frame(anova(Representative5.6, ddf = "Kenward-Roger", type = 3))
+ex3_ANOVAtableT5.6
+```
+
+```{r, include = FALSE}
+###7-8 year olds
+Representative7.8 <- lmer(cbind(representative) ~ Contrast*Functional + (1|SID) + (1|item), data = ex3_Child_7.8Tidy)
+summary(Representative7.8)
+RepresentativeS7.8<-summary(Representative7.8)
+tableT7.8<-as.data.frame(coef(RepresentativeS7.8))
+tableT7.8
+ex3_ANOVAtableT7.8<-as.data.frame(anova(Representative7.8, ddf = "Kenward-Roger", type = 3))
+ex3_ANOVAtableT7.8
+
+#Adults
+RepresentativeAdult <- lmer(cbind(representative) ~ Contrast*Functional + (1|SID) + (1|item), data = ex3_AdultTidy)
+summary(RepresentativeAdult)
+RepresentativeSAdult<-summary(RepresentativeAdult)
+tableTAdult<-as.data.frame(coef(RepresentativeSAdult))
+tableTAdult
+ex3_ANOVAtableTAdult<-as.data.frame(anova(RepresentativeAdult, ddf = "Kenward-Roger", type = 3))
+ex3_ANOVAtableTAdult
+```
+
+```{r, include = FALSE}
+#Discover items (sample selection: "let's discover new things about [animal]")
+Discover <- lmer(cbind(induction) ~ AgeGroup*Contrast*Functional + (1|SID) + (1|item), data = ex3)
+DiscoverS<-summary(Discover)
+tableD<-as.data.frame(coef(DiscoverS))
+tableD
+ex3_ANOVAtableD<-as.data.frame(anova(Discover, ddf = "Kenward-Roger", type = 3))
+ex3_ANOVAtableD
+```
+
+```{r, include = FALSE}
+#marginal means
+meansAgeD_ex3<-effect("AgeGroup", Discover)
+meansAgeD_ex3<-as.data.frame(meansAgeD_ex3)
+meansAgeD_ex3
+
+meansContrastD<-effect("Contrast", Discover)
+meansContrastD<-as.data.frame(meansContrastD)
+meansContrastD
+
+meansFuncD<-effect("Functional", Discover)
+meansFuncD<-as.data.frame(meansFuncD)
+meansFuncD
+
+meansCondD<-effect("Contrast*Functional", Discover)
+meansCondD<-as.data.frame(meansCondD)
+meansCondD
+
+meansFunAgeD<-effect("AgeGroup*Functional", Discover)
+meansFunAgeD<-as.data.frame(meansFunAgeD)
+meansFunAgeD
+
+#cell means
+meansCellD_ex3<-effect("AgeGroup*Contrast*Functional", Discover)
+meansCellD_ex3<-as.data.frame(meansCellD_ex3)
+meansCellD_ex3
+
+#Simple main effects within each age group
+#5-6 year olds
+Discover5.6 <- lmer(cbind(induction) ~ Contrast*Functional + (1|SID) + (1|item), data = ex3_Child_5.6Tidy)
+DiscoverS5.6<-summary(Discover5.6)
+tableD5.6<-as.data.frame(coef(DiscoverS5.6))
+tableD5.6
+ex3_ANOVAtableD5.6<-as.data.frame(anova(Discover5.6, ddf = "Kenward-Roger", type = 3))
+ex3_ANOVAtableD5.6
+```
+
+```{r, include = FALSE}
+#7-8 year olds
+Discover7.8 <- lmer(cbind(induction) ~ Contrast*Functional*direction + (1|SID) + (1|item), data = ex3_Child_7.8Tidy)
+summary(Discover7.8)
+DiscoverS7.8<-summary(Discover7.8)
+tableD7.8<-as.data.frame(coef(DiscoverS7.8))
+tableD7.8
+ex3_ANOVAtableD7.8<-as.data.frame(anova(Discover7.8, ddf = "Kenward-Roger", type = 3))
+ex3_ANOVAtableD7.8
+
+#Adults
+DiscoverAdult <- lmer(cbind(induction) ~ Contrast*Functional*direction + (1|SID) + (1|item), data = ex3_AdultTidy)
+summary(DiscoverAdult)
+DiscoverSAdult<-summary(DiscoverAdult)
+tableDAdult<-as.data.frame(coef(DiscoverSAdult))
+tableDAdult
+ex3_ANOVAtableDAdult<-as.data.frame(anova(DiscoverAdult, ddf = "Kenward-Roger", type = 3))
+ex3_ANOVAtableDAdult
+```
+
+```{r, echo = FALSE, warning = FALSE}
+#Figure for Study 3, with representativeness and discover (sample selection) choices
+#Create Figure 4a--representativeness, collapsed across contrast since this was not significant in a meaningful way for the current hypotheses
+Figure4a<-ggplot() +
+  geom_hline(mapping = NULL, data = NULL, colour ="#F9610A", yintercept = 3, na.rm = FALSE,
+  show.legend = NA) +
+  geom_point(data = meansFunAgeT, aes(x = AgeGroup, y = fit, colour = Functional, shape = Functional), stat = "identity", size = 4) +
+    scale_x_discrete(limits=c("Child_5.6", "Child_7.8", "Adult"), labels = c("Child_5.6" = "5-6 yrs","Child_7.8" = "7-8 yrs", "Adult" = "Adults")) +
+  ylim(1,5) +
+  geom_jitter(data = ex3, aes(x = AgeGroup, y = representative, colour = Functional), width = .30, height = .00, alpha = .5, shape = 124, size = 1) +
+  ggtitle("Representative") +
+  theme_few() +
+  theme(axis.text=element_text(size=10),
+        axis.title=element_text(size=10)) +
+  theme(legend.position="bottom", legend.direction="horizontal") +
+  theme(legend.title = element_blank()) +
+  scale_shape_manual(values=c(17, 19)) +
+  scale_color_manual(values=c("#4C9900", "#0066CC"), guide = guide_legend(reverse = FALSE)) +
+  labs(x="age group", y="Average exemplar selected")
+
+#Create Figure 4b--discover (sample selection), also collapsed across contrast
+Figure4b<-ggplot() +
+  geom_hline(mapping = NULL, data = NULL, colour = "#F9610A", yintercept = 3, na.rm = FALSE,
+  show.legend = NA) +
+  geom_point(data = meansFunAgeD, aes(x = AgeGroup, y = fit, colour = Functional, shape = Functional), stat = "identity", size = 4) +
+  scale_x_discrete(limits=c("Child_5.6", "Child_7.8", "Adult"), labels = c("Child_5.6" = "5-6","Child_7.8" = "7-8", "Adult" = "Adults")) +
+  ylim(1,5) +
+  geom_jitter(data = ex3, aes(x = AgeGroup, y = induction, colour = Functional), width = .30, height = .00, alpha = .5, shape = 124, size = 1) +
+  ggtitle("Sample Selection") +
+  theme_few() +
+  theme(axis.text=element_text(size=10),
+        axis.title=element_text(size=10)) +
+  theme(legend.position="bottom", legend.direction="horizontal") +
+  theme(legend.title = element_blank()) +
+  scale_shape_manual(values=c(17, 19)) +
+  scale_color_manual(values=c("#4C9900", "#0066CC"), guide = guide_legend(reverse = FALSE)) +
+    labs(x="age group", y=NULL)
+
+#Combine plots into one figure
+require(cowplot)
+Figure4 <- plot_grid(Figure4a, Figure4b, align = "h")
+save_plot("exfig4.png", Figure4, base_aspect_ratio = 1.3)
+```
+
+```{r, include = FALSE}
+#Make a common dataset with demographics info for Studies 1-3 in order to describe the population as briefly as possible
+#First, select only the variables we need (and that are common to all three)
+ex1Demo <- ex1Wide
+keepvarsDemo <- c("SID", "ExactAge", "AdultChild", "RE_code", "Hispanic", "Community", "State")
+ex1Demo <- ex1Demo[keepvarsDemo]
+
+ex2Demo <- ex2Wide
+ex2Demo <- ex2Demo[keepvarsDemo]
+
+ex3Demo <- ex3Wide
+ex3Demo <- ex3Demo[keepvarsDemo]
+
+#Combine into one dataset
+Demo <- rbind(ex1Demo, ex2Demo, ex3Demo)
+
+#Make subsets for adults and children
+Demo_Child <- Demo %>%
+  filter(AdultChild == "Child")
+Demo_Adult <- Demo %>%
+  filter(AdultChild == "Adult")
+```
+**Study 1**
+**Participants.** In Study 1, children were ages 5-6 (*N* = `r nrow(ex1Wide_Child_5.6)`; *M* age = `r round(mean(ex1Wide_Child_5.6$ExactAge, na.rm = TRUE), 2)`; `r sum(ex1Wide_Child_5.6$Gender == "Male")` male) and 7-8 (*N* = `r nrow(ex1Wide_Child_7.8)`; *M* age = `r round(mean(ex1Wide_Child_7.8$ExactAge, na.rm = TRUE), 2)`; `r sum(ex1Wide_Child_7.8$Gender == "Male")` male). 
+
+Across studies, children were `r round((sum(Demo_Child$RE_code == "White", na.rm = TRUE))/nrow(Demo_Child)*100, 0)`% White, `r round((sum(Demo_Child$RE_code == "Black", na.rm = TRUE))/nrow(Demo_Child)*100, 0)`% Black, `r round((sum(Demo_Child$RE_code == "Asian", na.rm = TRUE))/nrow(Demo_Child)*100, 0)`% Asian, `r round((sum(Demo_Child$RE_code == "MidEast", na.rm = TRUE))/nrow(Demo_Child)*100, 0)`% Middle Eastern or North African, and `r round((sum(Demo_Child$RE_code == "Mix", na.rm = TRUE))/nrow(Demo_Child)*100, 0)`% more than one race; `r round((sum(Demo_Child$Hispanic == "1", na.rm = TRUE))/nrow(Demo_Child)*100, 0)`% were Hispanic (of any race); `r round((sum(Demo_Child$RE_code == "Unreported", na.rm = TRUE))/nrow(Demo_Child)*100, 0)`% of parents did not report demographics information. Children gave oral assent and parents provided written consent.
+
+Adults in Study 1 (*N* = `r nrow(ex1Wide_Adult)`, *M* age = `r round(mean(ex1Wide_Adult$ExactAge, na.rm = TRUE), 2)`; `r sum(ex1Wide_Adult$Gender == "Male")` male) were recruited with Amazon Mechanical Turk and tested using Qualtrics. Across studies, adults were `r round((sum(Demo_Adult$RE_code == "White"))/nrow(Demo_Adult)*100, 0)`% White, `r round((sum(Demo_Adult$RE_code == "Black"))/nrow(Demo_Adult)*100, 0)`% Black, `r round((sum(Demo_Adult$RE_code == "Asian"))/nrow(Demo_Adult)*100, 0)`% Asian, `r round((sum(Demo_Adult$RE_code == "NativeAm"))/nrow(Demo_Adult)*100, 0)`% Native American or Alaskan Native, and `r round((sum(Demo_Adult$RE_code == "Mix"))/nrow(Demo_Adult)*100, 0)`% more than one race; `r round((sum(Demo_Adult$Hispanic == "1", na.rm = TRUE))/nrow(Demo_Adult)*100, 0)`% were Hispanic (of any race). Adults provided written consent. All study procedures were approved by the Institutional Review Board of New York University. 
+
+**Results**
+Participants of all ages selected extreme exemplars as the “best” of their categories (e.g., they gave a prize to the fastest cheetah). Judgments of which exemplars were most representative changed across age, however. Younger children selected extreme exemplars as most representative, and these selections declined with age in favor of more average exemplars. The age x condition interaction was reliable (*F*(`r ex1_ANOVAtableT[4,3]`, `r ex1_ANOVAtableT[4,4]`) = `r round((ex1_ANOVAtableT[4,5]),2)`, *p* `r format.pval((ex1_ANOVAtableT[4,6]), digits = 2, eps = .001)`) as were subsumed main effects of age (*F*(`r ex1_ANOVAtableT[1,3]`, `r ex1_ANOVAtableT[1,4]`) = `r round((ex1_ANOVAtableT[1,5]),2)`, *p* `r format.pval((ex1_ANOVAtableT[1,6]), digits = 2, eps = .001)`) and condition (*F*(`r ex1_ANOVAtableT[2,3]`, `r ex1_ANOVAtableT[2,4]`) = `r round((ex1_ANOVAtableT[2,5]),2)`, *p* `r format.pval((ex1_ANOVAtableT[2,6]), digits = 2, eps = .001)`). Younger children were equally likely to pick extreme exemplars when asked to select the ideal as when asked to pick the most representative (*F*(`r ex1_ANOVAtableT5.6[1,3]`, `r ex1_ANOVAtableT5.6[1,4]`) = `r round((ex1_ANOVAtableT5.6[1,5]),2)`, *p* = `r format.pval((ex1_ANOVAtableT5.6[1,6]), digits = 2, eps = .001)`), whereas children ages 7-8 (*F*(`r ex1_ANOVAtableT7.8[1,3]`, `r ex1_ANOVAtableT7.8[1,4]`) = `r round((ex1_ANOVAtableT7.8[1,5]),2)`, *p* `r format.pval((ex1_ANOVAtableT7.8[1,6]), digits = 2, eps = .001)`) and adults (*F*(`r ex1_ANOVAtableTAdult[1,3]`, `r ex1_ANOVAtableTAdult[1,4]`) = `r round((ex1_ANOVAtableTAdult[1,5]),2)`, *p* `r format.pval((ex1_ANOVAtableTAdult[1,6]), digits = 2, eps = .001)`) selected more extreme exemplars when asked to select the ideal than when asked to pick the most representative.
+
+Younger children also viewed extreme exemplars as providing more generalizable information. They were more likely to say, for example, that an unseen cheetah would be like the fastest cheetah (coded as 1) than the average-speed cheetah (coded as 0; *M* = `r round((meansAgeD[1,2]),2)`, 95% CI [`r round((meansAgeD[1,4]),2)`, `r round((meansAgeD[1,5]),2)`]. This tendency declined with age: Older children and adults more often generalized from average (instead of extreme) exemplars (ages 7-8: *M* = `r round((meansAgeD[2,2]),2)`, 95% CI [`r round((meansAgeD[2,4]),2)`, `r round((meansAgeD[2,5]),2)`]; adults: *M* = `r round((meansAgeD[3,2]),2)`, 95% CI [`r round((meansAgeD[3,4]),2)`, `r round((meansAgeD[3,5]),2)`]), Wald $X^2$(`r ex1_ANOVAtableD[2,2]`) = `r round((ex1_ANOVAtableD[2,1]),2)`, *p* `r format.pval((ex1_ANOVAtableD[2,3]), digits = 2, eps = .001)`.
+
+Considering the valence of the properties (e.g., whether an extreme value was desirable or not from a human perspective), participants were slightly less likely to choose extreme values as ideal when the properties were objectionable from a human perspective (*F*(`r ex1_ANOVAtableT_Ideals[2,3]`, `r ex1_ANOVAtableT_Ideals[2,4]`) = `r round((ex1_ANOVAtableT_Ideals[2,5]),2)`, *p* = `r format.pval((ex1_ANOVAtableT_Ideals[2,6]), digits = 2, eps = .001)`; negative, e.g., the stinkiest skunk, *M* = `r round((meansValT_Ideals[2,2]),2)`, 95% CI [`r round((meansValT_Ideals[2,4]),2)`, `r round((meansValT_Ideals[2,5]),2)`]; positive, e.g., the fastest cheetah, *M* = `r round((meansValT_Ideals[1,2]),2)`, 95% CI [`r round((meansValT_Ideals[1,4]),2)`, `r round((meansValT_Ideals[1,5]),2)`]). The effect of valence on judgments about ideals did not interact with age, *F*(`r ex1_ANOVAtableT_Ideals[3,3]`, `r ex1_ANOVAtableT_Ideals[3,4]`) = `r round((ex1_ANOVAtableT_Ideals[3,5]),2)`, *p* = `r format.pval((ex1_ANOVAtableT_Ideals[3,6]), digits = 2, eps = .001)`). Critically, there were no effects of valence on representativeness choices (*F*(`r ex1_ANOVAtableT_Representative[2,3]`, `r ex1_ANOVAtableT_Representative[2,4]`) = `r round((ex1_ANOVAtableT_Representative[2,5]),2)`, *p* = `r format.pval((ex1_ANOVAtableT_Representative[2,6]), digits = 2, eps = .001)`) or induction (Wald $X^2$(`r ex1_ANOVAtableD[4,2]`) = `r round((ex1_ANOVAtableD[4,1]),2)`, *p* = `r format.pval((ex1_ANOVAtableD[4,3]), digits = 2, eps = .001)`).
+
+Overall, Study 1 revealed that younger children view exemplars with more extreme values of characteristic properties as representative and informative. Older children and adults, in contrast, view more average exemplars in this manner. 
+
+```{r}
+Figure2
+```
+**Figure 2.** Average exemplar selected (as the best or most representative) in Studies 1-2 (N = 363), by age group and condition. Higher values represent exemplars that are more extreme on a characteristic property (e.g., faster cheetahs, stinkier skunks). Exemplar 3 represents the average, marked by the orange line. Large shapes are means by age group and condition; small lines are responses to individual trials.
+
+**Study 2**
+**Participants**
+In Study 2, children were ages 5-6 (*N* = `r nrow(ex2Wide_Child_5.6)`; *M* age = `r round(mean(ex2Wide_Child_5.6$ExactAge, na.rm = TRUE), 2)`; `r sum(ex2Wide_Child_5.6$Gender == "Male")` male) 7-8 (*N* = `r nrow(ex2Wide_Child_7.8)`; *M* age = `r round(mean(ex2Wide_Child_7.8$ExactAge, na.rm = TRUE), 2)`; `r sum(ex2Wide_Child_7.8$Gender == "Male")` male) and 9-10 (*N* = `r nrow(ex2Wide_Child_9.10)`; *M* age = `r round(mean(ex2Wide_Child_9.10$ExactAge, na.rm = TRUE), 2)`; `r sum(ex2Wide_Child_9.10$Gender == "Male")` male). Adults in Study 2 (`r nrow(ex2Wide_Adult)`, *M* age = `r round(mean(ex2Wide_Adult$ExactAge, na.rm = TRUE), 2)`; `r sum(ex2Wide_Adult$Gender == "Male", na.rm = TRUE)` male) were recruited using Amazon Mechanical Turk and tested using Qualtrics.
+
+**Results**
+The pattern of results was identical to Study 1 (Figure 2). Participants of all ages selected extreme exemplars as “the best” of their categories, but judgments of which exemplars were most representative changed across age: Younger children selected extreme exemplars as most representative, and such selections declined with age in favor of more average exemplars. The age x condition interaction was reliable (*F*(`r ex2_ANOVAtableT[4,3]`, `r ex2_ANOVAtableT[4,4]`) = `r round((ex2_ANOVAtableT[4,5]),2)`, *p* `r format.pval((ex2_ANOVAtableT[4,6]), digits = 2, eps = .001)`) as were subsumed main effects of age (*F*(`r ex2_ANOVAtableT[1,3]`, `r ex2_ANOVAtableT[1,4]`) = `r round((ex2_ANOVAtableT[1,5]),2)`, *p* `r format.pval((ex2_ANOVAtableT[1,6]), digits = 2, eps = .001)`) and condition (*F*(`r ex2_ANOVAtableT[2,3]`, `r ex2_ANOVAtableT[2,4]`) = `r round((ex2_ANOVAtableT[2,5]),2)`, *p* `r format.pval((ex2_ANOVAtableT[2,6]), digits = 2, eps = .001)`). Younger children were just as likely to pick extreme exemplars when asked to select the ideal as when asked to pick the most representative (*F*(`r ex2_ANOVAtableT5.6[1,3]`, `r ex2_ANOVAtableT5.6[1,4]`) = `r round((ex2_ANOVAtableT5.6[1,5]),2)`, *p* = `r format.pval((ex2_ANOVAtableT5.6[1,6]), digits = 2, eps = .001)`), whereas children ages 7-8 (*F*(`r ex2_ANOVAtableT7.8[1,3]`, `r ex2_ANOVAtableT7.8[1,4]`) = `r round((ex2_ANOVAtableT7.8[1,5]),2)`, *p* = `r format.pval((ex2_ANOVAtableT7.8[1,6]), digits = 2, eps = .001)`), ages 9-10 (*F*(`r ex2_ANOVAtableT9.10[1,3]`, `r ex2_ANOVAtableT9.10[1,4]`) = `r round((ex2_ANOVAtableT9.10[1,5]),2)`, *p* < `r format.pval((ex2_ANOVAtableT9.10[1,6]), digits = 2, eps = .001)`), and adults (*F*(`r ex2_ANOVAtableTAdult[1,3]`, `r ex2_ANOVAtableTAdult[1,4]`) = `r round((ex2_ANOVAtableTAdult[1,5]),2)`, *p* `r format.pval((ex2_ANOVAtableTAdult[1,6]), digits = 2, eps = .001)`) selected more extreme exemplars when asked to select the ideal than when asked to pick the most representative. Also as in Study 1, induction items revealed that generalizations based on the extreme instead of average exemplar declined with age (Wald $X^2$(`r ex2_ANOVAtableD[2,2]`) = `r round((ex2_ANOVAtableD[2,1]),2)`, *p* = `r format.pval((ex2_ANOVAtableD[2,3]), digits = 2, eps = .001)`; ages 5-6: *M* = `r round((meansAgeD_ex2[1,2]),2)`, 95% CI [`r round((meansAgeD_ex2[1,4]),2)`, `r round((meansAgeD_ex2[1,5]),2)`]; ages 7-8: *M* = `r round((meansAgeD_ex2[2,2]),2)`, 95% CI [`r round((meansAgeD_ex2[2,4]),2)`, `r round((meansAgeD_ex2[2,5]),2)`]; ages 9-10: *M* = `r round((meansAgeD_ex2[3,2]),2)`, 95% CI [`r round((meansAgeD_ex2[3,4]),2)`, `r round((meansAgeD_ex2[3,5]),2)`]; adults: *M* = `r round((meansAgeD_ex2[4,2]),2)`, 95% CI [`r round((meansAgeD_ex2[4,4]),2)`, `r round((meansAgeD_ex2[4,5]),2)`]). Participants' choices for ideal exemplars were again less extreme when the property was negative from a human perspective (*F*(`r ex2_ANOVAtableT_Ideals[2,3]`, `r ex2_ANOVAtableT_Ideals[2,4]`) = `r round((ex2_ANOVAtableT_Ideals[2,5]),2)`, *p* = `r format.pval((ex2_ANOVAtableT_Ideals[2,6]), digits = 2, eps = .001)`), with no valence effects on representativeness (*F*(`r ex2_ANOVAtableT_Representative[2,3]`, `r ex2_ANOVAtableT_Ideals[2,4]`) = `r round((ex2_ANOVAtableT_Representative[2,5]),2)`, *p* = `r format.pval((ex2_ANOVAtableT_Representative[2,6]), digits = 2, eps = .001)`) or induction (Wald $X^2$(`r ex2_ANOVAtableD[4,2]`) = `r round((ex2_ANOVAtableD[4,1]),2)`, *p* = `r format.pval((ex2_ANOVAtableD[4,3]), digits = 2, eps = .001)`).
+
+**Study 3**
+**Participants**
+In Study 3, children were ages 5-6 (*N* = `r nrow(ex3Wide_Child_5.6)`, *M* age = `r round(mean(ex3Wide_Child_5.6$ExactAge, na.rm = TRUE), 2)`; `r sum(ex3Wide_Child_5.6$Gender == "Male", na.rm = TRUE)` male) and 7-8 year olds (*N* =  `r nrow(ex3Wide_Child_7.8)` , *M* age = `r round(mean(ex3Wide_Child_7.8$ExactAge, na.rm = TRUE), 2)`; `r sum(ex3Wide_Child_7.8$Gender == "Male", na.rm = TRUE)` male). Adults in Study 3 (*N* = `r nrow(ex3Wide_Adult)`, *M* age = `r round(mean(ex3Wide_Adult$ExactAge, na.rm = TRUE), 2)`; `r sum(ex3Wide_Adult$Gender == "Male", na.rm = TRUE)` male) were recruited with Amazon Mechanical Turk and tested using Testable.org.
+
+**Results**
+In the baseline condition, when participants were introduced to the five exemplars of the novel categories that varied perceptually (e.g., “tulvers” varying in snout length) but were not told about functional consequences or contrastive value of the property, participants of each age selected exemplars around the middle of the scale (i.e., 3) as both most representative (5-6 year olds: *M* = `r round((meansCellT_ex3[1,4]),2)`, 95% CI [`r round((meansCellT_ex3[1,6]),2)`, `r round((meansCellT_ex3[1,7]),2)`]; 7-8 year olds: *M* = `r round((meansCellT_ex3[2,4]),2)`, 95% CI [`r round((meansCellT_ex3[2,6]),2)`, `r round((meansCellT_ex3[2,7]),2)`]; adults: *M* = `r round((meansCellT_ex3[3,4]),2)`, 95% CI [`r round((meansCellT_ex3[3,6]),2)`, `r round((meansCellT_ex3[3,7]),2)`]) and generalizable (5-6 year olds: *M* = `r round((meansCellD_ex3[1,4]),2)`, 95% CI [`r round((meansCellD_ex3[1,6]),2)`, `r round((meansCellD_ex3[1,7]),2)`]; 7-8 year olds: *M* = `r round((meansCellD_ex3[2,4]),2)`, 95% CI [`r round((meansCellD_ex3[2,6]),2)`, `r round((meansCellD_ex3[2,7]),2)`]; adults: *M* = `r round((meansCellD_ex3[3,4]),2)`, 95% CI [`r round((meansCellD_ex3[3,6]),2)`, `r round((meansCellD_ex3[3,7]),2)`]). This pattern indicates that children’s responses in Studies 1-2 cannot be explained by a low-level bias to always pick exemplars on one side of the scale, or to always select exemplars that had “more” of something, paving the way to consider the role of more theoretically meaningful mechanisms.
+
+Consistent with the possibility that participants judge extreme exemplars as representative because they more closely approximate ideal forms, participants did so more often when they received functional information about the property (indicating it was normatively tied to category membership) than when they did not receive this information (and instead had access only to perceptual variation; main effect of functional information (*F*(`r ex3_ANOVAtableT[3,3]`, `r ex3_ANOVAtableT[3,4]`) = `r round((ex3_ANOVAtableT[3,5]),2)`, *p* `r format.pval((ex3_ANOVAtableT[3,6]), digits = 2, eps = .001)`). Although the effect of functional information varied by age group (*F*(`r ex3_ANOVAtableT[5,3]`, `r ex3_ANOVAtableT[5,4]`) = `r round((ex3_ANOVAtableT[5,5]),2)`, *p* `r format.pval((ex3_ANOVAtableT[5,6]), digits = 2, eps = .001)`), at each age participants picked more extreme values when they were given functional information than when they were not (Figure 4). The interaction reflected that this effect was more pronounced among children ages 7-8 than either other group, but the effect of functional information was similar and reliable at each age considered separately (ages 5-6: *F*(`r ex3_ANOVAtableT5.6[2,3]`, `r ex3_ANOVAtableT5.6[2,4]`) = `r round((ex3_ANOVAtableT5.6[2,5]),2)`, *p* `r format.pval((ex3_ANOVAtableT5.6[2,6]), digits = 2, eps = .001)`; ages 7-8: *F*(`r ex3_ANOVAtableT7.8[2,3]`, `r ex3_ANOVAtableT7.8[2,4]`) = `r round((ex3_ANOVAtableT7.8[2,5]),2)`, *p* `r format.pval((ex3_ANOVAtableT7.8[2,6]), digits = 2, eps = .001)`; adults: *F*(`r ex3_ANOVAtableTAdult[2,3]`, `r ex3_ANOVAtableTAdult[2,4]`) = `r round((ex3_ANOVAtableTAdult[2,5]),2)`, *p`r format.pval((ex3_ANOVAtableTAdult[2,6]), digits = 2, eps = .001)`).
+
+Participants were also more likely to select extreme exemplars as providing the most generalizable information (revealed by their decisions of which exemplars to examine to learn about the category) when they received functional information about the properties than otherwise (main effect of functional information, *F*(`r ex3_ANOVAtableD[3,3]`, `r ex3_ANOVAtableD[3,4]`) = `r round((ex3_ANOVAtableD[3,5]),2)`, *p* `r format.pval((ex3_ANOVAtableD[3,6]), digits = 2, eps = .001)`). Although children ages 7-8 selected more extreme exemplars overall (*M* = `r round((meansAgeD_ex3[2,2]),2)`, 95% CI [`r round((meansAgeD_ex3[2,4]),2)`, `r round((meansAgeD_ex3[2,5]),2)`]) than 5-6 year olds (*M* = `r round((meansAgeD_ex3[1,2]),2)`, 95% CI [`r round((meansAgeD_ex3[1,4]),2)`, `r round((meansAgeD_ex3[1,5]),2)`]) or adults (*M* = `r round((meansAgeD_ex3[3,2]),2)`, 95% CI [`r round((meansAgeD_ex3[3,4]),2)`, `r round((meansAgeD_ex3[3,5]),2)`]), the effect of functional information on sample selection did not vary by age group (*F*(`r ex3_ANOVAtableD[5,3]`, `r ex3_ANOVAtableD[5,4]`) = `r round((ex3_ANOVAtableD[5,5]),2)`, *p* = `r format.pval((ex3_ANOVAtableD[5,6]), digits = 2, eps = .001)`) and was reliable at each age examined separately (ages 5-6: *F*(`r ex3_ANOVAtableD5.6[2,3]`, `r ex3_ANOVAtableD5.6[2,4]`) = `r round((ex3_ANOVAtableD5.6[2,5]),2)`, *p* = `r format.pval((ex3_ANOVAtableD5.6[2,6]), digits = 2, eps = .001)`; ages 7-8: *F*(`r ex3_ANOVAtableD7.8[2,3]`, `r ex3_ANOVAtableD7.8[2,4]`) = `r round((ex3_ANOVAtableD7.8[2,5]),2)`, *p* `r format.pval((ex3_ANOVAtableD7.8[2,6]), digits = 2, eps = .001)`; adults: *F*(`r ex3_ANOVAtableDAdult[2,3]`, `r ex3_ANOVAtableDAdult[2,4]`) = `r round((ex3_ANOVAtableDAdult[2,5]),2)`, *p* `r format.pval((ex3_ANOVAtableDAdult[2,6]), digits = 2, eps = .001)`).
+
+Inconsistent with the possibility that people view extreme exemplars as representative because they are more helpful for differentiating categories from one another, participants were not more likely to select extreme exemplars that would be helpful for differentiation in the presence of contrast categories (in fact they were slightly *less* likely to do so; *F*(`r ex3_ANOVAtableT[2,3]`, `r ex3_ANOVAtableT[2,4]`) = `r round((ex3_ANOVAtableT[2,5]),2)`, *p* = `r format.pval((ex3_ANOVAtableT[2,6]), digits = 2, eps = .001)`; contrast: *M* = `r round((meansContrastT[2,2]),2)`, 95% CI [`r round((meansContrastT[2,4]),2)`, `r round((meansContrastT[2,5]),2)`]; no contrast: *M* = `r round((meansContrastT[1,2]),2)`, 95% CI [`r round((meansContrastT[1,4]),2)`, `r round((meansContrastT[1,5]),2)`]). There were no effects of the presence of contrast categories on sample selection responses.
+```{r}
+Figure4
+```
+**Figure 4.** Average exemplar selected, by age group and functional information, collapsed across contrast category (N = 296). Higher values represent more functionally valuable exemplars. Exemplar 3 represents the average. Large shapes are means by age group and condition, small lines are responses to individual trials. Facets show representativeness (e.g., "the real, tulver-y tulver") and sample selection responses (e.g., "which would you look at to learn about tulvers?")
+```{r, include=FALSE}
+#Supplementary analyses
+
+#Preliminary analyses testing for effects of participant background variables from science and nature questionnaire, and interactions with key independent variables.
+
+#Make subset of participants including only those with nature and science background info
+ex1_Nature <- subset(ex1Wide, !is.na(ex1Wide$ActivitiesComp))
+
+#Choice
+ex1_choice_Nature <- lm(choice_av ~ AgeGroup*Condition + Pets + Camping + Hiking + Fishing + Gardening + CarePets + CareFarmAnimals + Zoos + NatureInterest + NatureBooks + AMNHVisits + DRVisits, ex1_Nature)
+ex1_choice_NatureS<-summary(ex1_choice_Nature)
+ex1_tableT_Nature<-as.data.frame(coef(ex1_choice_NatureS))
+ex1_tableT_Nature
+ex1_ANOVAtableT_Nature<-as.data.frame(Anova(ex1_choice_Nature, type = "III", singular.ok = TRUE))
+ex1_ANOVAtableT_Nature
+
+ex1_choice_Nature2 <- lm(choice_av ~ AgeGroup*Condition + ActivitiesComp + NatureComp, ex1_Nature)
+ex1_choice_Nature2S<-summary(ex1_choice_Nature2)
+ex1_tableT_Nature2<-as.data.frame(coef(ex1_choice_Nature2S))
+ex1_tableT_Nature2
+ex1_ANOVAtableT_Nature2<-as.data.frame(Anova(ex1_choice_Nature2, type = "III", singular.ok = TRUE))
+ex1_ANOVAtableT_Nature2
+```
+
+```{r, include = FALSE}
+#Induction
+ex1_induction_Nature <- lm(induction_av ~ AgeGroup*Condition + Pets + Camping + Hiking + Fishing + Gardening + CarePets + CareFarmAnimals + Zoos + NatureInterest + NatureBooks + AMNHVisits + DRVisits, ex1_Nature)
+ex1_induction_NatureS<-summary(ex1_induction_Nature)
+ex1_tableT_Nature<-as.data.frame(coef(ex1_induction_NatureS))
+ex1_ANOVAtableT_Nature<-as.data.frame(Anova(ex1_induction_Nature, type = "III", singular.ok = TRUE))
+ex1_ANOVAtableT_Nature
+
+ex1_induction_Nature2 <- lm(induction_av ~ AgeGroup*Condition + ActivitiesComp + NatureComp, ex1_Nature)
+ex1_induction_Nature2S<-summary(ex1_induction_Nature2)
+ex1_tableT_Nature2<-as.data.frame(coef(ex1_induction_Nature2S))
+ex1_ANOVAtableT_Nature2<-as.data.frame(Anova(ex1_induction_Nature2, type = "III", singular.ok = TRUE))
+ex1_ANOVAtableT_Nature2
+```
+
+```{r, include = FALSE}
+#Study 2
+
+#Subset of participants with nature and science background info
+ex2_Nature <- subset(ex2Wide, !is.na(ex2Wide$ActivitiesComp))
+View(ex2Wide)
+
+#Choice
+ex2_choice_Nature <- lm(choice_av ~ AgeGroup*Condition + Pets + Camping + Hiking + Fishing + Gardening + CarePets + CareFarmAnimals + Zoos + NatureInterest + NatureBooks + AMNHVisits + DRVisits, ex2_Nature)
+ex2_choice_NatureS<-summary(ex2_choice_Nature)
+ex2_tableT_Nature<-as.data.frame(coef(ex2_choice_NatureS))
+ex2_tableT_Nature
+ex2_ANOVAtableT_Nature<-as.data.frame(Anova(ex2_choice_Nature, type = "III", singular.ok = TRUE))
+ex2_ANOVAtableT_Nature
+
+ex2_choice_Nature2 <- lm(choice_av ~ AgeGroup*Condition + ActivitiesComp + NatureComp, ex2_Nature)
+ex2_choice_Nature2S<-summary(ex2_choice_Nature2)
+ex2_tableT_Nature2<-as.data.frame(coef(ex2_choice_Nature2S))
+ex2_tableT_Nature2
+ex2_ANOVAtableT_Nature2<-as.data.frame(Anova(ex2_choice_Nature2, type = "III", singular.ok = TRUE))
+ex2_ANOVAtableT_Nature2
+View(ex1Wide)
+```
+
+```{r, include = FALSE}
+#Induction
+ex2_induction_Nature <- lm(induction_av ~ AgeGroup*Condition + Pets + Camping + Hiking + Fishing + Gardening + CarePets + CareFarmAnimals + Zoos + NatureInterest + NatureBooks + AMNHVisits + DRVisits, ex2_Nature)
+ex2_induction_NatureS<-summary(ex2_induction_Nature)
+ex2_tableT_Nature<-as.data.frame(coef(ex2_induction_NatureS))
+ex2_ANOVAtableT_Nature<-as.data.frame(Anova(ex2_induction_Nature, type = "III", singular.ok = TRUE))
+ex2_ANOVAtableT_Nature
+
+ex2_induction_Nature2 <- lm(induction_av ~ AgeGroup*Condition + ActivitiesComp + NatureComp, ex2_Nature)
+ex2_induction_Nature2S<-summary(ex2_induction_Nature2)
+ex2_tableT_Nature2<-as.data.frame(coef(ex2_induction_Nature2S))
+ex2_ANOVAtableT_Nature2<-as.data.frame(Anova(ex2_induction_Nature2, type = "III", singular.ok = TRUE))
+ex2_ANOVAtableT_Nature2
+```
+
+```{r, include = FALSE}
+# Study 3
+
+#Subset of participants with nature and science background info
+ex3_Nature <- subset(ex3Wide, !is.na(ex3Wide$ActivitiesComp))
+
+#Preliminary analysis including participant background variables
+#Choice
+ex3_choice_Nature <- lm(choice_av ~ AgeGroup*Functional*Contrast + Pets + Camping + Hiking + Fishing + Gardening + CarePets + CareFarmAnimals + Zoos + NatureInterest + NatureBooks + AMNHVisits + DRVisits, ex3_Nature)
+ex3_choice_NatureS<-summary(ex3_choice_Nature)
+ex3_tableT_Nature<-as.data.frame(coef(ex3_choice_NatureS))
+ex3_tableT_Nature
+ex3_ANOVAtableT_Nature<-as.data.frame(Anova(ex3_choice_Nature, type = "III", singular.ok = TRUE))
+ex3_ANOVAtableT_Nature
+
+ex3_choice_Nature2 <- lm(choice_av ~ AgeGroup*Functional*Contrast + ActivitiesComp + NatureComp, ex3_Nature)
+ex3_choice_Nature2S<-summary(ex3_choice_Nature2)
+ex3_tableT_Nature2<-as.data.frame(coef(ex3_choice_Nature2S))
+ex3_tableT_Nature2
+ex3_ANOVAtableT_Nature2<-as.data.frame(Anova(ex3_choice_Nature2, type = "III", singular.ok = TRUE))
+ex3_ANOVAtableT_Nature2
+```
+
+```{r, include = FALSE}
+#Induction
+ex3_induction_Nature <- lm(induction_av ~ AgeGroup*Functional*Contrast + Pets + Camping + Hiking + Fishing + Gardening + CarePets + CareFarmAnimals + Zoos + NatureInterest + NatureBooks + AMNHVisits + DRVisits, ex3_Nature)
+ex3_induction_NatureS<-summary(ex3_induction_Nature)
+ex3_tableT_Nature<-as.data.frame(coef(ex3_induction_NatureS))
+ex3_ANOVAtableT_Nature<-as.data.frame(Anova(ex3_induction_Nature, type = "III", singular.ok = TRUE))
+ex3_ANOVAtableT_Nature
+
+ex3_induction_Nature2 <- lm(induction_av ~ AgeGroup*Functional*Contrast + ActivitiesComp + NatureComp, ex3_Nature)
+ex3_induction_Nature2S<-summary(ex3_induction_Nature2)
+ex3_tableT_Nature2<-as.data.frame(coef(ex3_induction_Nature2S))
+ex3_ANOVAtableT_Nature2<-as.data.frame(Anova(ex3_induction_Nature2, type = "III", singular.ok = TRUE))
+ex3_ANOVAtableT_Nature2
+```
+#Supplementary Online Materials
+
+**Science and Nature Questionnaire**
+Children in Studies 1-3 were recruited and tested in a major cultural institution (The American Museum of Natural History). Of participants who provided location information, `r  sum(Demo_Child$Community == "Urban", na.rm = TRUE)` were from urban environments, `r  sum(Demo_Child$Community == "Suburban", na.rm = TRUE)` from suburban environments, and `r  sum(Demo_Child$Community == "Rural", na.rm = TRUE)` from rural environments. In order to test for possible effects of children's experiences on our key variables, we gathered information on children's background experiences with science and nature in the form of a questionnaire completed by parents, as has been used in previous work at this institution (Rhodes & Liebenson, 2015). The complete Science and Nature Background Questionnaire used in Studies 1-3 is available at https://osf.io/v5pcs/.
+
+Of the `r nrow(ex1Wide_Child)` child participants in Study 1, `r  nrow(ex1_Nature)` families chose to provide information about background experiences with science and nature; `r  nrow(ex2_Nature)` of the total `r nrow(ex2Wide_Child)` children in Study 2 and `r  nrow(ex3_Nature)` of the `r nrow(ex3Wide_Child)` children in Study 3 provided this information. In preliminary analyses for each study, we tested whether children's representativeness judgments and inductive inferences were significantly affected by background variables including the child's home community, the presence of pets in the home, each item on the 6-point "activities in the past year" scale (and a composite of these questions), each item on the 4-point "interest in nature" scale (and a composite of these questions), number of visits to the museum, and number of visits to the interactive Discovery Room portion of the museum where the study took place. None of the background variables significantly predicted responses or interacted with any of our key independent variables, therefore we did not consider these participant variables further.
+```{r, include = FALSE}
+#Supplementary analysis for Study 3, with direction included in the model. Direction was coded as "most-least" = animal items for which the progression was most to least (with the "most" of the property as functionally better), and "least-most" = animal items for which the progression was least to most (with the "least" of the property as functionally better). The goal of these analyses is to capture whether the effect of functional information can be explained by a low-level preference to choose exemplars with the "most" of a varied property.
+
+#Representativeness
+Representative_dir <- lmer(cbind(representative) ~ AgeGroup*Contrast*Functional*direction + (1|SID) + (1|item), data = ex3)
+ex3_ANOVAtableT_dir<-as.data.frame(anova(Representative_dir, ddf = "Kenward-Roger", type = 3))
+ex3_ANOVAtableT_dir
+
+meansAgeDirT<-effect("AgeGroup*direction", Representative_dir)
+meansAgeDirT<-as.data.frame(meansAgeDirT)
+meansAgeDirT
+
+meansConDirT<-effect("Contrast*direction", Representative_dir)
+meansConDirT<-as.data.frame(meansConDirT)
+meansConDirT
+```
+
+```{r, include = FALSE}
+Discover_dir <- lmer(cbind(induction) ~ AgeGroup*Contrast*Functional*direction + (1|SID) + (1|item), data = ex3)
+ex3_ANOVAtableD_dir<-as.data.frame(anova(Discover_dir, ddf = "Kenward-Roger", type = 3))
+ex3_ANOVAtableD_dir
+
+meansAgeDirD<-effect("AgeGroup*direction", Discover_dir)
+meansAgeDirD<-as.data.frame(meansAgeDirD)
+meansAgeDirD
+```
+**Study 3 Supplementary Analyses**
+To address possible low-level mechanisms that could explain the pattern of results in Studies 1-2, in Study 3 we varied the nature of the properties shown in the novel animal scales, so that having *more* of a target property facilitated the key behavior (e.g., longer snouts helped dig for food) for half of the items, whereas having *less* did so for the other half (e.g., smaller ears were better for hiding from predators). We ran preliminary analyses including the direction of the scale in the models for representativeness and sample selection choices in order ensure that any effects of functional and contrastive value could not be explained by these low-level perceptual mechanisms. If younger children selected more extreme exemplars in Studies 1-2 only because of these perceptual cues, and selected exemplars with the "most" of a perceptually salient property as representative and informative regardless of category knowledge, then the direction of the scale alone would predict responses on these measures in Study 3.
+
+The effect of direction across trials (animal kinds with a least-to-most progression versus those with a most-to-least progression) varied with age (*F*(`r ex3_ANOVAtableT_dir[8,3]`, `r ex3_ANOVAtableT_dir[8,4]`) = `r round((ex3_ANOVAtableT_dir[8,5]),2)`, *p* = `r format.pval((ex3_ANOVAtableT_dir[8,6]), digits = 2, eps = .001)`; subsumed main effect of age group, *F*(`r ex3_ANOVAtableT_dir[1,3]`, `r ex3_ANOVAtableT_dir[1,4]`) = `r round((ex3_ANOVAtableT_dir[1,5]),2)`, *p* = `r format.pval((ex3_ANOVAtableT_dir[1,6]), digits = 2, eps = .001)`; subsumed main effect of direction, *F*(`r ex3_ANOVAtableT_dir[4,3]`, `r ex3_ANOVAtableT_dir[4,4]`) = `r round((ex3_ANOVAtableT_dir[4,5]),2)`, *p* = `r format.pval((ex3_ANOVAtableT_dir[4,6]), digits = 2, eps = .001)`). Participants of all ages chose more extreme exemplars overall on trials with a least-to-most progression, but this was most pronounced in younger children (least-to-most, ages 5-6: *M* = `r round((meansAgeDirT[1,3]),2)`,  CI [`r round((meansAgeDirT[1,5]),2)`, `r round((meansAgeDirT[1,6]),2)`]; ages 7-8:  *M* = `r round((meansAgeDirT[2,3]),2)`,  CI [`r round((meansAgeDirT[2,5]),2)`, `r round((meansAgeDirT[2,6]),2)`], adults: *M* = `r round((meansAgeDirT[3,3]),2)`,  CI [`r round((meansAgeDirT[3,5]),2)`, `r round((meansAgeDirT[3,6]),2)`], most-to-least, ages 5-6: *M* = `r round((meansAgeDirT[4,3]),2)`,  CI [`r round((meansAgeDirT[4,5]),2)`, `r round((meansAgeDirT[4,6]),2)`]; ages 7-8: *M* = `r round((meansAgeDirT[5,3]),2)`,  CI [`r round((meansAgeDirT[5,5]),2)`, `r round((meansAgeDirT[5,6]),2)`]; adults: *M* = `r round((meansAgeDirT[6,3]),2)`,  CI [`r round((meansAgeDirT[6,5]),2)`, `r round((meansAgeDirT[6,6]),2)`]). Direction of the scale did not interact with functional information (*F*(`r ex3_ANOVAtableT_dir[10,3]`) = `r round((ex3_ANOVAtableT_dir[10,5]),2)`, *p* = `r format.pval((ex3_ANOVAtableT_dir[10,6]), digits = 2, eps = .001)`).
+
+Similar patterns emerged for sample selection choices (age group x direction interaction, *F*(`r ex3_ANOVAtableD_dir[8,3]`, `r ex3_ANOVAtableD_dir[8,4]`) = `r round((ex3_ANOVAtableD_dir[8,5]),2)`, *p* = `r format.pval((ex3_ANOVAtableD_dir[8,6]), digits = 2, eps = .001)`; subsumed main effects of age group, *F*(`r ex3_ANOVAtableD_dir[1,3]`, `r ex3_ANOVAtableD_dir[1,4]`) = `r round((ex3_ANOVAtableD_dir[1,5]),2)`, *p* = `r format.pval((ex3_ANOVAtableD_dir[1,6]), digits = 2, eps = .001)`, and direction, *F*(`r ex3_ANOVAtableD_dir[4,3]`, `r ex3_ANOVAtableT_dir[4,4]`) = `r round((ex3_ANOVAtableD_dir[4,5]),2)`, *p* = `r format.pval((ex3_ANOVAtableD_dir[4,6]), digits = 2, eps = .001)`). Participants of all ages chose to learn from relatively more extreme exemplars on animal trials with a least-to-most direction, but these effects were most pronounced in younger children (least-to-most, ages 5-6: *M* = `r round((meansAgeDirD[1,3]),2)`,  CI [`r round((meansAgeDirD[1,5]),2)`, `r round((meansAgeDirD[1,6]),2)`]; ages 7-8: *M* = `r round((meansAgeDirD[2,3]),2)`,  CI [`r round((meansAgeDirD[2,5]),2)`, `r round((meansAgeDirD[2,6]),2)`]; adults: *M* = `r round((meansAgeDirD[3,3]),2)`,  CI [`r round((meansAgeDirD[3,5]),2)`, `r round((meansAgeDirD[3,6]),2)`]; trials with a most-to-least progression, ages 5-6: *M* = `r round((meansAgeDirD[4,3]),2)`,  CI [`r round((meansAgeDirD[4,5]),2)`, `r round((meansAgeDirD[4,6]),2)`]; ages 7-8: *M* = `r round((meansAgeDirD[5,3]),2)`,  CI [`r round((meansAgeDirD[5,5]),2)`, `r round((meansAgeDirD[5,6]),2)`]; adults: *M* = `r round((meansAgeDirD[6,3]),2)`,  CI [`r round((meansAgeDirD[6,5]),2)`, `r round((meansAgeDirD[6,6]),2)`]).
+
+While these analyses suggest that younger children did have an overall bias to pick exemplars that had more (rather than less) of a perceptual property, this tendency does not account for the full pattern of findings obtained in Study 3 or alter our interpretation of those results. As shown in Figure S1 and S2, functional information reliably led participants of all ages to select more extreme exemplars as both more representative (Figure S1) and informative (Figure S2) on all items—including both those where having more of a property was more functional and those where having less of a property was more functional.
+
+This analysis also revealed that Direction information interacted with whether children were told about a Contrast category or not, but not in a manner indicating that contrast categories facilitate selections of extreme exemplars. As reported in the main text, participants did not choose more constrastive exemplars in the presence of relevant contrast categories (in fact, they chose slightly *less* contrastive ones, main effect of contrast category: *F*(`r ex3_ANOVAtableT[2,3]`, `r ex3_ANOVAtableT_dir[2,4]`) = `r round((ex3_ANOVAtableT[2,5]),2)`, *p* = `r format.pval((ex3_ANOVAtableT[2,6]), digits = 2, eps = .001)`). This supplemental analysis revealed that this pattern emerged only on trials with a most-to-least progression--on these trials, participants chose exemplars that were *more* similar to the contrast category (meaning that they also displayed *more* of the varied property; *M* = `r round((meansAgeDirT[4,3]),2)`,  CI [`r round((meansAgeDirT[4,5]),2)`, `r round((meansAgeDirT[4,6]),2)`]; no contrast: *M* = `r round((meansAgeDirT[3,3]),2)`,  CI [`r round((meansAgeDirT[3,5]),2)`, `r round((meansAgeDirT[3,6]),2)`]). On trials with a least-to-most progression, however, participants responded similarly regardless of the presence or absence of a relevant contrast category (contrast: *M* = `r round((meansConDirT[2,3]),2)`,  CI [`r round((meansConDirT[2,5]),2)`, `r round((meansConDirT[2,6]),2)`]; no contrast: *M* = `r round((meansConDirT[1,3]),2)`,  CI [`r round((meansConDirT[1,5]),2)`, `r round((meansConDirT[1,6]),2)`]; contrast x direction interaction: *F*(`r ex3_ANOVAtableT_dir[9,3]`, `r ex3_ANOVAtableT_dir[9,4]`) = `r round((ex3_ANOVAtableT_dir[9,5]),2)`, *p* = `r format.pval((ex3_ANOVAtableT_dir[9,6]), digits = 2, eps = .001)`).
+```{r, include = FALSE}
+#Figure for items in Study 3, No Contrast conditions only, with panels for each item and image inserted, and means by age group and functional.
+
+#Give labels to items so that they can be associated with the images
+NoContrast$item<-as.factor(NoContrast$item)
+NoContrast$item<-recode_factor(NoContrast$item, "1" = "Tulver", "2" = "Virdex", "3"  = "Bosa", "4" = "Sibu", "5" = "Akar", "6" = "Lorp", "7" = "Kita", "8" = "Upos")
+
+#reorder functional info so it graphs in the same order as previous graphs
+NoContrast$Functional <- factor(NoContrast$Functional, levels = c("Functional", "Nonfunctional"))
+
+meansItem_rep <- NoContrast %>%
+  group_by(AgeGroup, Functional, item) %>%
+       summarise(representative=mean(representative))
+```
+
+```{r, echo = FALSE, warning = FALSE}
+#Create Figure 5--representativeness
+FigureS1<-ggplot() +
+  geom_hline(mapping = NULL, data = NULL, colour = "#F9610A", yintercept = 3, na.rm = FALSE,
+  show.legend = NA) +
+  geom_point(data = meansItem_rep, aes(x = AgeGroup, y = representative, colour = Functional, shape = Functional), stat = "identity", size = 2) +
+    scale_x_discrete(limits=c("Child_5.6", "Child_7.8", "Adult"), labels = c("Child_5.6" = "5-6 yrs","Child_7.8" = "7-8 yrs", "Adult" = "Adults")) +
+  ylim(1,5) +
+  geom_jitter(data = NoContrast, aes(x = AgeGroup, y = representative, colour = Functional), width = .30, height = .00, alpha = .5, shape = 124, size = 1) +
+  ggtitle("Representative choices by item") +
+  facet_wrap(~item, ncol=4) +
+  theme_few() +
+  theme(axis.text=element_text(size=7),
+        axis.title=element_text(size=7)) +
+  theme(legend.position="bottom", legend.direction="horizontal") +
+  theme(legend.title = element_blank()) +
+  scale_shape_manual(values=c(17, 19)) +
+  scale_color_manual(values=c("#4C9900", "#0066CC"), guide = guide_legend(reverse = FALSE)) +
+  labs(x="Age Group", y="Average exemplar selected")
+
+FigureS1
+```
+
+**Figure S1.** Average exemplar selected on the representative task (e.g., "Which is the *real, tulver-y tulver*?"), by age group and functional information, no contrast conditions only. Higher values represent more functionally valuable exemplars. Exemplar 3 represents the average. Large dots are means by age group, small lines are individual participant selections. Facets show responses by item. Participants selected more extreme exemplars when given functional information at all age groups, on every item.
+```{r, include = FALSE}
+#Discover (induction)
+meansItem_dis <- NoContrast %>%
+  group_by(AgeGroup, Functional, item) %>%
+       summarise(induction=mean(induction))
+```
+
+```{r, echo = FALSE, warning = FALSE}
+#Create Figure 6--discover (sample selection)
+FigureS2<-ggplot() +
+  geom_hline(mapping = NULL, data = NULL, colour = "#F9610A", yintercept = 3, na.rm = FALSE,
+  show.legend = NA) +
+  geom_point(data = meansItem_dis, aes(x = AgeGroup, y = induction, colour = Functional, shape = Functional), stat = "identity", size = 2) +
+  scale_x_discrete(limits=c("Child_5.6", "Child_7.8", "Adult"), labels = c("Child_5.6" = "5-6","Child_7.8" = "7-8", "Adult" = "Adults")) +
+  ylim(1,5) +
+  geom_jitter(data = NoContrast, aes(x = AgeGroup, y = induction, colour = Functional), width = .30, height = .00, alpha = .5, shape = 124, size = 1) +
+  ggtitle("Sample selection choices by item") +
+  facet_wrap(~item, ncol=4) +
+  theme_few() +
+  theme(axis.text=element_text(size=7),
+        axis.title=element_text(size=7)) +
+  theme(legend.position="bottom", legend.direction="horizontal") +
+  theme(legend.title = element_blank()) +
+  scale_shape_manual(values=c(17, 19)) +
+  scale_color_manual(values=c("#4C9900", "#0066CC"), guide = guide_legend(reverse = FALSE)) +
+    labs(x="Age Group", y=NULL)
+
+FigureS2
+```
+
+**Figure S2.** Average exemplar selected on the sample selection task (e.g., "Which would you look at to learn the most about tulvers?"), by age group and functional information, no contrast conditions only. Higher values represent more functionally valuable exemplars. Exemplar 3 represents the average. Large dots are means by Age Group, small lines are individual participant selections. Facets show responses by item. Participants selected more extreme exemplars when given functional information on almost all items. Note that on the "Sibu" animal trial, participants saw five novel animals varying in mane fluffiness; in functional information conditions, participants were told that having smoother (i.e., less fluffy) manes was more functionally ideal for running fast to catch prey. This explanation may have been too complicated for children and could have conflicted with an existing bias to view fluffier manes as more ideal (e.g., having a fluffy mane is a characteristic property of lions).
